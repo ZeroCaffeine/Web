@@ -1,0 +1,1833 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8" />
+<style>
+	table { 
+		border : px solid #444444;
+		border-collapse : collapse;
+		text-align : center;
+	}
+	th, td { 
+		border : 1px solid #444444;
+		padding : 5px;
+	}
+</style>
+
+<!--roslibjs 사용 시 필수 import-->
+<!--
+<script type="text/javascript" src="roslibjs_import.js"></script>
+-->
+<script type="text/javascript" src="http://static.robotwebtools.org/roslibjs/current/roslib.min.js"></script>
+<script type="text/javascript" type="text/javascript"></script>
+<script>
+// 버전 : 2020-03-23
+
+var ros = new ROSLIB.Ros();
+ros.close();
+url = '13.125.45.126:9090'
+//url = 'localhost:9090'
+ros.connect("ws://" + url);
+//ros.connect('ws://10.40.5.85:9090');
+//ros.connect('ws://10.40.5.85:9090');
+//ros.connect('ws:114.71.100.135:9090');
+
+ros.on('connection', function() {
+	document.getElementById("status").innerHTML = "Connected";
+});
+ros.on('error', function(error) {
+	document.getElementById("status").innerHTML = "Error";
+});
+ros.on('close', function() {
+	document.getElementById("status").innerHTML = "Closed";
+});
+
+ros.getTopics(init_ros_topics);
+ros.getServices(init_ros_services);
+
+function init_ros_topics(topic_list) {};
+function init_ros_services(service_list) {};
+
+// 서비스 클라이언트
+var get_latest_station_info_client = null;
+var get_arrival_info_client = null;
+var open_car_information_topic_client = null;
+var close_car_information_topic_client = null;
+var get_call_list_client = null;
+var add_call_client = null;
+var cancel_call_client = null;
+var receive_add_call_result_client = null;
+var receive_call_alarm_client = null;
+var receive_call_alarm_response_client = null;
+var get_car_point_list_client = null;
+var add_user_client = null;
+
+// 정류장 정보
+var station_list = new Array();
+// 정류장 DB 갱신일자
+var app_latest_update_date = "2000-01-01"
+
+// 특정차량정보 구독정보 
+var car_information_list = new Array();
+// 특정차량정보 구독자
+var car_information_topic_subscriber_list = new Array();
+
+// 예약정보 리스트 
+var call_list = new Array();
+
+// --------------------------------------------------
+
+// [roslibjs 서비스 클라이언트 등록 함수] <app_001>
+function initialize_service_client() {
+
+	add_user_client = new ROSLIB.Service({
+		ros : ros,
+		name : '/add_user_service',
+		serviceType : 'automobile_project/add_user_s'
+	});
+
+	// 1. 정류장 최신정보 서비스 클라이언트 등록
+	get_latest_station_info_client = new ROSLIB.Service({
+		ros : ros,
+		name : '/get_latest_station_info_service',
+		serviceType : 'automobile_project/get_latest_station_info_s'
+	});
+
+	// 2. 정류장 도착정보 서비스 클라이언트 등록
+	get_arrival_info_client = new ROSLIB.Service({
+		ros : ros,
+		name : '/get_arrival_info_service',
+		serviceType : 'automobile_project/get_arrival_info_beta_s'
+	});
+
+	// 3. 특정 차량정보 토픽 개설 서비스 클라이언트 등록
+	open_car_information_topic_client = new ROSLIB.Service({
+		ros : ros,
+		name : '/open_car_information_topic_service',	
+		serviceType : 'automobile_project/open_car_information_topic_s'
+	});
+
+	// 4. 특정 차량정보 토픽 취소 서비스 클라이언트 등록
+	close_car_information_topic_client = new ROSLIB.Service({
+		ros : ros,
+		name : '/close_car_information_topic_service',	
+		serviceType : 'automobile_project/close_car_information_topic_s'
+	});
+
+	// 5. 호출가능 차량목록 요청 서비스 클라이언트 등록
+	get_call_list_client = new ROSLIB.Service({
+		ros : ros,
+		name : '/get_call_list_service',	
+		serviceType : 'automobile_project/get_call_list_s'
+	});
+
+	// 5. 신규호출 등록 서비스 클라이언트 등록
+	add_call_client = new ROSLIB.Service({
+		ros : ros,
+		name : '/add_call_service',	
+		serviceType : 'automobile_project/add_call_s'
+	});	
+
+	// 6. 예약취소 서비스 클라이언트 등록
+	cancel_call_client = new ROSLIB.Service({
+		ros : ros,
+		name : '/cancel_call_service',	
+		serviceType : 'automobile_project/cancel_call_s'
+	});	
+
+	// 7. 알람확인 서비스 클라이언트 등록
+	receive_call_alarm_response_client = new ROSLIB.Service({
+		ros : ros,
+		name : "/receive_call_alarm_response_service",
+		serviceType : "automobile_project/receive_call_alarm_response_s"
+	});
+
+	get_car_point_list_client = new ROSLIB.Service({
+		ros : ros,
+		name : "/get_car_point_list_service_s",
+		serviceType : "automobile_project/get_car_point_list_server_s"
+	});
+}
+
+// [정류장 정보 초기화 함수] <app_002>
+// 이후 DB 정보 불러오기 기능으로 대체될 수 있다.
+function initialize_station() {
+	var count = 4;
+	for (var i = 1; i <= count; i++) {
+		var station = {
+			"station_id" : i,
+			"station_name" : "station_0" + i,
+			"latitude" : i,
+			"longitude" : i,
+			"latest_update_date" : "2000-01-01"
+		}
+
+		station_list.push(station);
+		//print("Station list : " + station_list.length);
+		}
+}
+
+// --------------------------------------------------
+
+function add_user_service(user_id) {
+	return new Promise(function (resolve, reject) {
+		var request = new ROSLIB.ServiceRequest({
+			user_id : user_id
+		});
+		add_user_client.callService(request, function(result) {
+			if (result) { resolve(result); }
+			reject(new Error("Add user request is failed"));
+		});
+	});
+}
+
+function add_user_request() {
+	var user_id = document.getElementById("add_user_user_id").value;
+	user_id = convert("string", user_id);
+
+	print("사용자 등록 요청 : " + user_id);
+
+	add_user_service(user_id).then(async function (result) { 
+
+		var result_status = result.result_status;
+		print("사용자 등록 결과 : " + result_status);
+
+	}).catch(function (err) { 
+		console.error(err);
+	});
+}
+
+// --------------------------------------------------
+
+// [정류장 최신정보 서비스 함수] <app_003>
+function get_latest_station_info_service(app_latest_update_date) {
+	return new Promise(function (resolve, reject) {
+		var request = new ROSLIB.ServiceRequest({
+			app_latest_update_date : app_latest_update_date
+		});
+		get_latest_station_info_client.callService(request, function(result) {
+			if (result) { resolve(result); }
+			reject(new Error("Get latest station information request is failed"));
+		});
+	});
+}
+
+// [정류장 최신정보 요청 함수] <app_004> 
+function get_latest_station_info_request() {
+	var updated = null;
+	var update_list = null;
+
+	// 1. 어플리케이션 최종 갱신일자 가져오기 (default : "2020-01-01")
+	app_latest_update_date = app_latest_update_date;
+	document.getElementById("app_latest_update_date").innerHTML = app_latest_update_date;
+	//app_latest_update_date = document.getElementById("app_latest_update_date").value
+	
+	// 2. 서버에 정류장 최신정보 요청
+	get_latest_station_info_service(app_latest_update_date).then(function (result) { 
+		
+		// 3. 결과 반환 (요청처리여부 / 서버DB갱신일 / 정류장정보목록)
+		updated = result.updated;
+		server_latest_update_date = result.server_latest_update_date;
+		update_list = result.update_list;
+
+		// 3.1 변경할 필요가 없는 경우 : 잘못된 요청(에러) / 같은 갱신일
+		if (updated == false) {
+			// 아무것도 갱신하지 않음.
+			print("Do not need to update station list.");
+		} 
+		// 3.2 변경해야 하는 경우 : 서버와 앱의 갱신일 불일치
+		else {
+			// 4. 정류장 정보 갱신
+			update_station_list(update_list);
+			// 5. DB 갱신일자 갱신
+			update_latest_update_date(server_latest_update_date);
+		}
+
+		// 6. 결과 출력
+		print_latest_station_info_result();
+		
+	}).catch(function (err) { 
+		console.error(err);
+	});
+}
+
+// [정류장 정보 갱신 함수] <app_005>
+function update_station_list(update_list) {
+	print("Update station list");
+	station_list = update_list;
+}
+
+// [정류장정보 DB 갱신일자 갱신함수] <app_006> 
+function update_latest_update_date(server_latest_update_date) {
+	print("Update latest update date");
+	app_latest_update_date = new String(server_latest_update_date);
+	print("Date : " + app_latest_update_date);
+}
+
+// [최신 정류장 정보 결과 출력 함수] <app_007>
+function print_latest_station_info_result()
+{
+	// 0. 현재 앱에 저장된 정류장 정보 불러오기
+	var info_list = station_list;
+
+	// 1. 결과테이블 초기화
+	var tbody = document.getElementById("latest_station_info_table_tbody");
+	while (tbody.rows.length > 0) {
+		tbody.deleteRow(tbody.rows.length - 1);
+	}
+
+	// 2. 결과 입력
+	for (var i = 0; i < info_list.length; i++) {
+		var info  = info_list[i];
+		var row = tbody.insertRow(tbody.rows.length);
+		var num = i + 1;
+		row.insertCell(0).innerHTML = num;
+		row.insertCell(1).innerHTML = info.station_id;
+		row.insertCell(2).innerHTML = info.station_name;
+		row.insertCell(3).innerHTML = info.latitude;
+		row.insertCell(4).innerHTML = info.longitude;		
+		row.insertCell(5).innerHTML = info.latest_update_date;
+	}
+}
+
+// [정류장 정보 불러오기 함수] <app_008>
+function get_station_list() {
+	return station_list;
+}
+
+// --------------------------------------------------
+
+// [인근 정류장 탐색 요청 함수] <app_009>
+// 인근정류장 탐색 버튼 클릭 시 수행되는 함수
+// input box 의 latitude/longitude 값을 get_near_station 함수에 전달한다.
+function get_near_station_request() {
+	var station_id = null;
+	var station_lat = null;
+	var station_long = null;
+
+	// 1. 사용자 위치 읽어오기 (default : 0/0)
+	var near_user_lat = document.getElementById("near_user_lat").value;
+	var near_user_long = document.getElementById("near_user_long").value;
+	// 1.5 float64 형변환 : ros service 형식에 맞게 형변환을 수행한다.
+	near_user_lat = convert("float", near_user_lat);
+	near_user_long = convert("float", near_user_long);
+
+	var near_station = calculate_near_station(near_user_lat, near_user_long);
+	print_near_station_result(near_station);
+}
+
+// [인근 정류장 계산 함수] <app_010>
+// station 변수를 반환한다. (station : station_id / station_name / latitude / longitude / latest_update_date)
+function calculate_near_station(user_lat, user_long) {
+	var result_station = null;
+	var shortest = Number.POSITIVE_INFINITY;
+
+	for (var i = 0; i < station_list.length; i++) {
+		var station = station_list[i];
+		// 사용자 위치 - 정류장 사이의 거리를 구한다.
+		var delta_latitude = user_lat - station.latitude;
+		var delta_longitude = user_long - station.longitude;
+		var distance = Math.sqrt(Math.pow(delta_latitude, 2) + Math.pow(delta_longitude, 2));
+		// 이전 거리보다 가까울 시 거리 및 최단거리 정류장 갱신
+		if (distance < shortest) {
+			shortest = distance;
+			result_station = station;
+		}
+	}
+
+	return result_station;
+}
+
+// [인근정류장 결과 출력 함수] <app_011>
+function print_near_station_result(station)
+{
+	var near_station_id = document.getElementById("near_station_id");
+	var near_station_name = document.getElementById("near_station_name");
+	var near_station_lat = document.getElementById("near_station_lat");
+	var near_station_long = document.getElementById("near_station_long");
+	var near_station_latest_update_date = document.getElementById("near_station_latest_update_date");
+
+	near_station_id.innerHTML = station.station_id;
+	near_station_name.innerHTML = station.station_name;
+	near_station_lat.innerHTML = station.latitude;
+	near_station_long.innerHTML = station.longitude;
+	near_station_latest_update_date.innerHTML = station.latest_update_date;
+}
+
+// --------------------------------------------------
+
+// [특정정류장 요청 함수] <app_012>
+// 특정정류장 탐색 버튼 클릭 시 수행되는 함수
+// input box 의 latitude/longitude 값을 get_specific_station 함수에 전달한다.
+function get_specific_station_request() {
+	var station_lat = null;
+	var station_long = null;
+
+	// 1. 정류장 번호 읽어오기 (default : 1)
+	var specific_station_id = document.getElementById("specific_station_id_input").value;
+	// 1.5 float64 형변환 : ros service 형식에 맞게 형변환을 수행한다.
+	specific_station_id = convert("float", specific_station_id);
+
+	// 2. 특정정류장 검색
+	var specific_station = calculate_specific_station(specific_station_id);
+
+	if (specific_station != null) {
+		// 3. 결과출력
+		print_specific_station_result(specific_station);
+	}	
+}
+
+// [특정정류장 계산 함수] <app_013>
+function calculate_specific_station(station_id) {
+	var result_station = null;
+
+	result_station = station_list.find(station => station.station_id == station_id);
+
+	if (result_station != null) {
+		print("Result of specific searching!");
+		print("1 : " + result_station.station_id);
+		print("2 : " + result_station.station_name);
+		print("3 : " + result_station.latitude);
+		print("4 : " + result_station.longitude);
+		print("5 : " + result_station.latest_update_date);
+	}
+	else {
+		print("Calculated specific station id is not exist!");
+	}	
+
+	return result_station;
+}
+
+// [특정정류장 결과 출력 함수] <app_014>
+function print_specific_station_result(station)
+{
+	var specific_station_id = document.getElementById("specific_station_id")
+	var specific_station_name = document.getElementById("specific_station_name")
+	var specific_station_lat = document.getElementById("specific_station_lat");
+	var specific_station_long = document.getElementById("specific_station_long");
+	var specific_station_latest_update_date = document.getElementById("specific_station_latest_update_date")
+
+	specific_station_id.innerHTML = station.station_id;
+	specific_station_name.innerHTML = station.station_name;
+	specific_station_lat.innerHTML = station.latitude;
+	specific_station_long.innerHTML = station.longitude;
+	specific_station_latest_update_date.innerHTML = station.latest_update_date;
+}
+
+// --------------------------------------------------
+
+// [정류장 도착정보 서비스 함수] <app_015>
+// 정류장 번호를 전달해 해당하는 정류장의 도착정보(일정거리 내 접근중인 차량정보목록)를 요청한다.
+function get_arrival_info_service(station_id) {
+	return new Promise(function (resolve, reject) {
+		var request = new ROSLIB.ServiceRequest({
+			station_id : station_id
+		});
+		get_arrival_info_client.callService(request, function(result) {
+			if (result) { resolve(result); }
+			reject(new Error("Get arrival info request is failed"));
+		});
+	});
+}
+
+// [정류장 도착정보 요청 함수] <app_016>
+// 정류장 도착정보 버튼 클릭 시 수행되는 함수
+// input box 의 station_id 값을 get_arrival_info 함수에 전달한다.
+function get_arrival_info_request() {
+	
+	var arrival_info_list = new Array();
+
+	// 1. 정류장 번호 읽어오기 (default : 1)
+	var arrival_station_id = document.getElementById("arrival_info_station_id").value; 
+	// 2. float64 형변환 : ros service 형식에 맞게 형변환을 수행한다.
+	arrival_station_id = convert("float", arrival_station_id);
+	// 3. 정류장 번호 검사
+	var station_existance_check = check_station_existance(arrival_station_id);
+	// 3.1 없는 정류장 번호일 경우
+	if (station_existance_check == false) {
+		print("Get arrival info request error : No such station id");
+		return;
+	} 
+
+	// 4. 서버에 정류장 도착정보 검색 요청 전달
+	get_arrival_info_service(arrival_station_id).then(function (result) {
+		// 5. 결과 반환
+		if (result.car_list != null) {
+			arrival_info_list = result.car_list;
+			if (arrival_info_list.length > 0) {
+				// 6. 결과 출력
+				print_arrival_info_result(arrival_info_list);
+			} else {
+				print("Get arrival info result : empty list");
+			}
+		} else {
+			print("Get arrival info result error : result is null.");
+		}
+	}).catch(function (err) {
+		console.error(err);
+	});
+}
+
+// [정류장 도착정보 결과 출력 함수] <app_017>
+function print_arrival_info_result(info_list)
+{
+	// 1. 결과테이블 초기화
+	var tbody = document.getElementById("arrival_info_table_tbody");
+	while (tbody.rows.length > 0) {
+		tbody.deleteRow(tbody.rows.length - 1);
+	}
+
+	// 2. 결과 입력
+	console.log("Info list length : " + info_list.length);
+	for (var i = 0; i < info_list.length; i++) {
+		var info  = info_list[i];
+		var row = tbody.insertRow(tbody.rows.length);
+		row.insertCell(0).innerHTML = info.car_id;
+		row.insertCell(1).innerHTML = info.status;
+		row.insertCell(2).innerHTML = info.current_station_id;
+		row.insertCell(3).innerHTML = info.next_station_id;
+		row.insertCell(4).innerHTML = info.route;		
+		row.insertCell(5).innerHTML = info.latitude;
+		row.insertCell(6).innerHTML = info.longitude;
+		row.insertCell(7).innerHTML = info.total_seat;
+		row.insertCell(8).innerHTML = info.current_seat;
+		row.insertCell(9).innerHTML = info.distance;
+		row.insertCell(10).innerHTML = info.goal_station_id;
+	}
+}
+
+// --------------------------------------------------
+
+// [특정차량 정보개설 서비스 함수] <app_018> 
+// 차량번호를 전달해 해당하는 차량정보의 발행 개설을 요청한다.
+function open_car_information_topic_service(car_id, user_id) {
+	return new Promise(function (resolve, reject) {
+		var request = new ROSLIB.ServiceRequest({
+			car_id : car_id,
+			user_id : user_id
+		});
+		open_car_information_topic_client.callService(request, function(result) {
+			if (result) { resolve(result); }
+			reject(new Error("Open car information topic request is failed"));
+		});
+	});
+}
+
+// [특정차량정보 토픽 개설 요청 함수] <app_019>
+function open_car_information_topic_request() {
+	var acceptance = null;
+
+	// 0.사용자 id 읽어오기
+	var user_id = document.getElementById("open_car_information_topic_user_id").value;
+	// 1. 차량번호 읽어오기 (default : 1)
+	var car_id = document.getElementById("open_car_information_topic_car_id").value;
+	print("Requesting open car_id : " + car_id);
+	// 1.5 float64 형변환 : ros service 형식에 맞게 형변환을 수행한다.
+	car_id = convert("int", car_id);
+	print("Converted : " + car_id);
+
+	// 구독중인 차량에 대한 요청인지 검사 (구독자 유무 검사)
+	var subscriber_check = check_subscriber(car_id);
+	// 이미 해당 차량에 대해 구독중인 경우 (구독자 존재)
+	if (subscriber_check == true) {
+		print("이미 구독중인 차량에 대한 요청입니다.");
+		return;
+	}
+
+	// 2. 서버에 차량정보 발행 요청
+	open_car_information_topic_service(car_id, user_id).then(function (result) { 
+		// 3. 결과 반환 
+		//acceptance = result.accepted;
+		var result_status = result.result_status;
+		//print("Acceptance : " + acceptance);
+		// 4. 결과 출력
+		//print_open_car_information_topic_result(acceptance);
+		print_open_car_information_topic_result(result_status);
+		// 5.1 발행 요청이 정상 처리된 경우
+		//if (acceptance == true) {
+		if (result_status == 1 || result_status == 2) {
+			print("구독 요청 : 성공");
+			// 6. 특정차량정보 구독 추가
+			// <에러 발생한 곳>
+			// 중복요청 시에도 accepted 를 True 로 반환해서 발생한 문제
+			// 서버측에서는 정상적으로 1개만 유지되지만 앱에서는 중복요청시마다 같은 유저에 의한 구독이 계속 증가하는 오류.
+			// 중복요청시 accepted 는 False 로, 메시지 처리는 True 로 하도록 한다.
+			add_car_information_topic_subscriber(car_id);
+		}	
+		// 5.2 발행 요청이 정상 처리되지 않은 경우	
+		else {
+			// 에러 처리 (임시)
+			print("Open car information topic request is failed.");
+		}
+	}).catch(function (err) { 
+		console.error(err);
+	});
+}
+
+// 차량정보 구독자 검사 함수
+// 이미 구독중인 차량정보라면 true 를 반환한다.
+function check_subscriber(car_id) {
+	print("구독자 체크 : " + car_information_topic_subscriber_list.length);
+    var subscriber = car_information_topic_subscriber_list.find(x => x["car_id"] == car_id);
+    if (subscriber != undefined) {
+        return true;
+    }
+    return false;
+}
+
+// [특정차량정보 개설요청 결과출력 함수] <app_020>
+//function print_open_car_information_topic_result(acceptance)
+function print_open_car_information_topic_result(status)
+{
+	//var open_car_information_topic_acceptance = document.getElementById("open_car_information_topic_acceptance");
+	var result_status = document.getElementById("open_car_information_topic_result_status");
+	result_status.innerHTML = status;
+}
+
+// --------------------------------------------------
+
+// [특정 차량정보 구독 추가 함수] <app_021>
+// 인자로 받은 차량번호로 구독 서브스레드를 생성한다.
+function add_car_information_topic_subscriber(car_id) {
+	// 1. 구독 클라이언트 생성
+	var client = initialize_car_information_topic_client(1);
+	// 2. 구독자 저장
+	var subscriber = {
+	    "client" : client,
+	    "car_id" : car_id
+	}
+	car_information_topic_subscriber_list.push(subscriber);
+
+	//ros.getTopics(print_getTopics);
+
+	// 3. 구독 반복 시작
+	client.subscribe(function(message) {
+		// 3. 차량정보 구독/저장
+		subscribe_car_information_topic(message);
+	});
+}
+
+function process_getTopics(topic_list) {
+	// ros.getTopics(callback) 이 불려지면 해당 ros 의 topic 이 초기화(갱신)되는 듯.
+}
+
+// [특정차량정보 토픽 클라이언트 등록 함수] <app_022>
+function initialize_car_information_topic_client(car_id) {
+	// 1. 특정차량정보 토픽 클라이언트
+	var server_car_information_topic_client = new ROSLIB.Topic({
+       ros : ros,
+       name : '/server_car_information_' + String(car_id),
+       //messageType : 'automobile_project/car_information_m'
+       messageType : 'automobile_project/car_information_m'
+
+    });
+
+	return server_car_information_topic_client;
+}
+
+// [특정차량정보 구독 처리 함수] <app_023>
+// message 변수로 전달된 차량정보를 저장한다.
+function subscribe_car_information_topic(message) {
+	// 1. 기존의 차량정보를 검색한다
+	var index = car_information_list.findIndex(car => car.car_id == message.car_id);
+	// 2.1 같은 차량에 대한 정보가 이미 있다면 갱신
+	if (index != -1) {
+		//print("Update car information");
+		car_information_list[index] = message;
+	}
+	// 2.2 같은 차량에 대한 정보가 없다면 추가
+	else {
+		print("Push new car information");
+		car_information_list.push(message);
+	}
+
+	// 3. 출력 (임시)
+	print_car_information(message.car_id)
+}
+
+// [특정차량정보 구독정보 출력 함수] <app_024>
+function print_car_information(car_id) {
+	// 1. 출력할 차량정보 가져오기
+	var car = get_car_information(car_id);
+
+	// 1.2. 출력할 정보가 없다면 종료한다.
+	if (car == undefined) {
+		print("Print car information error : no data");
+		return null;
+	}
+
+	// 2. 결과테이블 초기화
+	var tbody = document.getElementById("car_information_table_tbody");
+	while (tbody.rows.length > 0) {
+		tbody.deleteRow(tbody.rows.length - 1);
+	}
+
+	// 3. 결과 입력
+	var row = tbody.insertRow(tbody.rows.length);
+	row.insertCell(0).innerHTML = car.car_id;
+	row.insertCell(1).innerHTML = car.status;
+	row.insertCell(2).innerHTML = car.current_station_id;
+	row.insertCell(3).innerHTML = car.next_station_id;
+	row.insertCell(4).innerHTML = car.route;		
+	row.insertCell(5).innerHTML = car.latitude;
+	row.insertCell(6).innerHTML = car.longitude;
+	row.insertCell(7).innerHTML = car.total_seat;
+	row.insertCell(8).innerHTML = car.current_seat;
+	row.insertCell(9).innerHTML = car.distance;
+	row.insertCell(10).innerHTML = car.goal_station_id;
+}
+
+// [특정차량정보 반환 함수] <app_025>
+function get_car_information(car_id) {
+	//print("Return car information");
+	var car = car_information_list.find(car => car.car_id == car_id);
+	if (car == undefined) {
+		print("There is no such car");
+	}
+	return car;
+}
+
+// --------------------------------------------------
+
+// [특정차량정보 구독 취소 함수] <app_026>
+function close_car_information_topic_service(car_id, user_id) {
+	return new Promise(function (resolve, reject) {
+		var request = new ROSLIB.ServiceRequest({
+			car_id : car_id,
+			user_id : user_id
+		});
+		close_car_information_topic_client.callService(request, function(result) {
+			if (result) { resolve(result); }
+			reject(new Error("Close car information topic request is failed"));
+		});
+	});
+}
+
+// [특정차량정보 토픽 취소 요청 함수] <app_027>
+function close_car_information_topic_request() {
+	var acceptance = null;
+
+	// 0.사용자 id 읽어오기
+	var user_id = document.getElementById("close_car_information_topic_user_id").value;
+	// 1. 차량번호 읽어오기 (default : 1)
+	var car_id = document.getElementById("close_car_information_topic_car_id").value;
+	print("Requesting close car_id : " + car_id);
+	// 1.5 float64 형변환 : ros service 형식에 맞게 형변환을 수행한다.
+	car_id = convert("int", car_id);
+	// 2. 서버에 차량정보 토픽 취소 요청
+	close_car_information_topic_service(car_id, user_id).then(function (result) { 
+		// 3. 결과 반환 
+		acceptance = result.accepted;
+		// 4. 결과 출력
+		print_close_car_information_topic_result(acceptance);
+		// 5.1 취소 요청이 정상 처리된 경우
+		if (acceptance == true) {
+			// 6. 특정차량정보 구독 제거
+			delete_car_information_topic_subscriber(car_id);
+		}	
+		// 5.2 발행 요청이 정상 처리되지 않은 경우	
+		else {
+			// 에러 처리 (임시)
+			print("Close car information topic request is failed.");
+		}
+	}).catch(function (err) { 
+		console.error(err);
+	});
+}
+
+// [특정차량정보 토픽 취소요청 결과출력 함수] <app_028>
+function print_close_car_information_topic_result(acceptance)
+{
+	var close_car_information_topic_acceptance = document.getElementById("close_car_information_topic_acceptance");
+	close_car_information_topic_acceptance.innerHTML = acceptance;
+}
+
+// [특정 차량정보 구독 제거 함수] <app_029> 
+// 인자로 받은 차량번호로 구독 서브스레드를 제거한다.
+async function delete_car_information_topic_subscriber(car_id) {
+	// 1. 해당 구독자 불러오기
+	//var client_index = car_information_topic_client_list.findIndex(client => client.name = '/server_car_information_' + String(car_id));
+	var index = car_information_topic_subscriber_list.findIndex(x => x["car_id"] == car_id);
+	if (index != -1) {
+		// 2. 구독 취소
+		await sleep(1000);
+		car_information_topic_subscriber_list[index]["client"].unsubscribe();
+		// 3. 구독자 제거
+		car_information_topic_subscriber_list.splice(index, 1);
+	}
+	print("Car information topic subscriber : " + car_information_topic_subscriber_list.length);
+}
+
+// --------------------------------------------------
+
+// [호출가능목록 요청 서비스] <app_030>
+function get_call_list_service(user_id, start_station_id, end_station_id) {
+	return new Promise(function (resolve, reject) {
+		var request = new ROSLIB.ServiceRequest({
+			user_id : user_id,
+			start_station_id : start_station_id,
+			end_station_id : end_station_id
+		});
+		get_call_list_client.callService(request, function(result) {
+			if (result) { resolve(result); }
+			reject(new Error("Get call list request is failed"));
+		});
+	});
+}
+
+// [호출가능목록 요청 서비스 요청 함수] <app_031>
+function get_call_list_request() {
+	// 0.사용자 id 읽어오기
+	var user_id = document.getElementById("get_call_list_user_id").value;
+	// 1. 시작/도착 정류장 번호 읽어오기 (default : 1 / 4)
+	var start_station_id = document.getElementById("get_call_list_start_station_id").value;
+	var end_station_id = document.getElementById("get_call_list_end_station_id").value;
+	print("Requesting get call list start/end id : " + start_station_id + " / " + end_station_id);
+	// 2. float64 형변환 : ros service 형식에 맞게 형변환을 수행한다.
+	start_station_id = convert("int", start_station_id);
+	end_station_id = convert("int", end_station_id);
+	// 3.1 정류장 일치 검사
+	if (start_station_id == end_station_id) {
+		print("Get call list service request error : Same station id");
+		return;
+	}
+	// 3.2 정류장 존재 검사
+	var start_check = check_station_existance(start_station_id);
+	var end_check = check_station_existance(end_station_id);
+	// 3.1 시작/도착 정류장 중 하나라도 존재하지 않는 번호라면
+	if (start_check == false || end_station_id == false) {
+		print("Get call list service request error : No such station id");
+		return;
+	}
+	// 4. 서버에 호출가능목록 요청 서비스 요청 
+	get_call_list_service(user_id, start_station_id, end_station_id).then(function (result) { 
+		var result_status = result.result_status;
+
+		if (result_status == 1){
+			print("Get call list result : Success");
+			var call_list = result.call_list;
+			print_get_call_list_service_result(call_list);
+		}
+		else {
+			print("Get call list result : Failed");
+		}
+
+		/*
+		// 2. 결과 출력
+		if (call_list != null) {
+			if (call_list.length > 0) {
+				print_get_call_list_service_result(call_list);
+			} else {
+				print("Get call list result : Empty");
+			}
+		}
+		*/
+	}).catch(function (err) { 
+		console.error(err);
+	});
+	
+}
+
+// [호출가능목록 요청 서비스 결과 출력 함수] <app_032>
+function print_get_call_list_service_result(call_list) {
+	// 1. 결과테이블 초기화
+	var tbody = document.getElementById("get_call_list_table_tbody");
+	while (tbody.rows.length > 0) {
+		tbody.deleteRow(tbody.rows.length - 1);
+	}
+	// 2. 호출가능목록 차량정보 출력
+	for (var i = 0; i < call_list.length; i++) {
+		var car = call_list[i];
+		var row = tbody.insertRow(tbody.rows.length);
+		row.insertCell(0).innerHTML = car.car_id;
+		row.insertCell(1).innerHTML = car.status;
+		row.insertCell(2).innerHTML = car.current_station_id;
+		row.insertCell(3).innerHTML = car.next_station_id;
+		row.insertCell(4).innerHTML = car.route;		
+		row.insertCell(5).innerHTML = car.latitude;
+		row.insertCell(6).innerHTML = car.longitude;
+		row.insertCell(7).innerHTML = car.total_seat;
+		row.insertCell(8).innerHTML = car.current_seat;
+		row.insertCell(9).innerHTML = car.distance;
+		row.insertCell(10).innerHTML = car.goal_station_id;
+	}
+}
+
+// --------------------------------------------------
+
+// [호출 등록 서비스] <app_033>
+function add_call_service(user_id, car_id, start_station_id, end_station_id) {
+	return new Promise(function (resolve, reject) {
+		var request = new ROSLIB.ServiceRequest({
+			user_id : user_id,
+			car_id : car_id,
+			start_station_id : start_station_id,
+			end_station_id : end_station_id
+		});
+		add_call_client.callService(request, function(result) {
+			if (result) { resolve(result); }
+			reject(new Error("Add call request is failed"));
+		});
+	});
+}
+
+// [호출 등록요청 함수] <app_034>
+async function add_call_request() {
+
+	// ----------[등록검사 시작]----------
+	// 0.사용자 id 읽어오기
+	var user_id = document.getElementById("add_call_user_id").value;
+	print("예약등록 이름 : " + user_id);
+
+	// 1. 차량번호 및 시작/도착 정류장 번호 읽어오기 (default : 1 / 4)
+	var car_id = document.getElementById("add_call_car_id").value;
+	var start_station_id = document.getElementById("add_call_start_station_id").value;
+	var end_station_id = document.getElementById("add_call_end_station_id").value;
+	print("예약등록 시작/종료 정류장번호 : " + start_station_id + " / " + end_station_id);
+	
+	// 2. 형변환 : ros service 형식에 맞게 형변환을 수행한다.
+	car_id = convert("int", car_id);
+	start_station_id = convert("int", start_station_id);
+	end_station_id = convert("int", end_station_id);
+	
+	// 3. 정류장 일치 검사
+	// 시작정류장과 도착정류장이 같다면 요청은 거부된다.
+	if (start_station_id == end_station_id) {
+		print("Add call service request failed : Same start/end station id");
+		return;
+	}
+	
+	// 4. 정류장 존재 검사
+	// 앱에 저장된 정류장 정보에서 요청한 정류장(시작/도착)들이 존재하는지 검사한다.
+	var start_check = check_station_existance(start_station_id);
+	var end_check = check_station_existance(end_station_id);
+	// 4.1 시작/도착 정류장 중 하나라도 존재하지 않는 번호라면
+	if (start_check == false || end_station_id == false) {
+		print("Add call service request failed : No such station id");
+		return;
+	}
+	
+	// 5. 예약중복 검사
+	// 현재 요청중이거나 요청이 완료된 예약이 앱의 예약정보에 존재하는지 검사한다.
+	var call_existance_check = check_call_existance(user_id);
+	// 5.1 예약이 이미 존재한다면
+	if (call_existance_check == true) {
+		print("Add call service request failed : Call is already exist");
+		return;
+	}
+	// ----------[등록검사 종료]----------
+
+	// 6. 예약등록 요청
+	add_call_service(user_id, car_id, start_station_id, end_station_id).then(async function (result) { 
+		// 7. 예약등록 요청 응답 수신 
+		var accepted = result.accepted;
+		print("예약등록 요청 성공여부 : " + accepted);
+
+		// 7.1 예약등록 요청이 정상적으로 처리된 경우
+		if (accepted == true) {
+			// 8. 예약정보 생성/등록
+			// 미확정 상태의 예약정보를 등록한다.
+			// 1) 예약등록 성공 시 예약정보를 확정(status = 1)으로 갱신한다.
+			// 2) 예약등록 실패 시 예약정보를 제거한다.
+			// 8.1 예약정보 생성
+			var call = {
+				"user_id" : user_id,
+				"car_id" : car_id,
+				"start_station_call" : { "station_id" : start_station_id, "alarm" : false, "check": false},
+				"end_station_call" : { "station_id" : end_station_id, "alarm" : false, "check": false},
+				"status" : 0 
+				// [예약처리상태] => 0 : 대기 / 1 : 정상처리 / -1 : 취소 
+				// 예약처리상태 : 0으로 시작해 서버에서 정상 처리 시 1로 변경되고, 취소 처리 시 -1 로 변경된다.
+				// Timeout 시까지 처리되지 않는다면 0이 유지된다.
+			}
+			// 8.2 예약정보 저장
+			call_list.push(call);
+			// 9. 예약정보 처리(서버의) 대기 수행
+			var timeout_delay = 5; // 대기시간 (초 단위)
+			// wait_add_call_result() 의 실행이 종료될 때까지 블록된다.
+			// 대기(timeout_delay 동안) 도중 서버의 처리 메시지가 도착하면 1(처리) / -1(실패) 이 반환된다.
+			// 대기가 종료될 때까지 서버의 메시지가 도착하지 않으면 0이 반환된다.
+			var result_status = await wait_add_call_result(call, timeout_delay); 
+			// 9.1 예약실패 / 타이머 종료 시 예약정보 제거
+			if (result_status == -1 || result_status == 0) {
+				print("예약등록 대기 만료 : 예약정보 제거");
+				var call_index = call_list.findIndex(item => item == call);
+				call_list.splice(call_index, 1);
+				call = null;
+				print("전체 예약 개수: " + call_list.length);
+				print("제거된 예약정보 : " + call);
+			}	
+			// 10. 결과 출력
+			print_add_call_result(result_status);
+			
+		}
+	}).catch(function (err) { 
+		console.error(err);
+	});
+}
+
+function remove_call_by_call(call) {
+	print("예약 제거 (예약)");
+	var call_index = call_list.findIndex(item => item == call);
+				call_list.splice(call_index, 1);
+				call = null;
+				print("전체 예약 개수: " + call_list.length);
+				print("제거된 예약정보 : " + call);
+}
+
+function remove_call_by_call_id(call_id) {
+	print("예약 제거 (예약번호)");
+	var call_index = call_list.findIndex(item => item["call_id"] == call_id);
+				call_list.splice(call_index, 1);
+				call = null;
+				print("전체 예약 개수: " + call_list.length);
+				print("제거된 예약정보 : " + call);
+}
+
+// [호출 등록처리 대기 함수] <app_035>
+// timeout_delay 는 초 단위이다. 
+async function wait_add_call_result(call, timeout_delay) {
+	while (timeout_delay > 0) {
+		// 1. 예약이 정상 처리된 경우
+		if (call["status"] == 1) {
+			// 정상 처리값을 반환 
+			print("Wait add call : Success = call(" + call["call_id"] + ")");
+			return 1;
+		}
+		// 2. 예약이 취소처리된 경우
+		if (call["status"] == -1) {
+			// 취소값 반환
+			print("Wait add call : Failed");
+			return -1;
+		}
+		await sleep(1000);
+		timeout_delay -= 1;
+		print("Wait add call result : " + timeout_delay);
+	}
+	// 3. 타이머가 종료된 경우
+	// 종료값 반환
+	return 0;
+}
+
+// [호출등록 결과 출력 함수] <app_036>
+function print_add_call_result(status) {
+	var add_call_status = document.getElementById("add_call_status");
+	add_call_status.innerHTML = status;
+}
+
+// [호출등록 결과수신 서비스 등록/처리 함수] <app_037>
+function advertise_receive_add_call_result_service(user_id) {
+	print("Advertise receive add call result service");
+	receive_add_call_result_client = new ROSLIB.Service({
+		ros : ros,
+		name : '/receive_add_call_result_service_' + user_id,
+		serviceType : 'automobile_project/receive_add_call_result_s'
+	});
+
+	receive_add_call_result_client.advertise((request, response) => {
+		
+		// 1. 예약등록 처리 결과수신
+		var call_id = request.call_id;
+		var car_id = request.car_id;
+		var result_status = request.result_status;
+		var request_accepted = request.accepted;
+	
+		call_id = convert("string", call_id);
+		result_status = convert("int", result_status);
+		car_id = convert("int", car_id);
+
+		print("예약등록 처리여부(" + request_accepted + ")");
+
+		// 2. 예약등록 시 저장한 예약정보 불러오기
+		var call = call_list.find(call => call["car_id"] == car_id)
+		// 2-1. 해당하는 예약정보가 없을 경우 (에러)
+		if (call == undefined) {
+			print("Exception : 예약등록 결과에 해당하는 예약정보가 없습니다.");
+			response.accepted = false;
+			return true;
+		} 
+
+		// 3. 예약정보 처리상태 업데이트
+		// 3.1 예약등록이 정상 처리된 경우
+		if (request_accepted == true) {
+			// 1) call_id 추가
+			call["call_id"] = call_id;
+			// 2) 등록상태 확정
+			call["status"] = 1;
+		}
+		// 3.2 예약등록이 실패한 경우
+		else if (request_accepted == false) {
+			call["status"] = -1
+		}
+
+		// 4. 응답 반환
+		response.accepted = true;
+		return true;
+	});
+}
+
+// --------------------------------------------------
+
+// [정류장 존재유무 검사 함수] <app_038>
+function check_station_existance(station_id) {
+	var station = station_list.find(station => station.station_id == station_id);
+	if (station == undefined)
+		return false;
+	else 
+		return true;
+}
+
+// [예약정보 존재 검사 함수] <app_042>
+function check_call_existance(user_id) {
+	// 1. 예약정보 검색
+	var call = call_list.find(call => call["user_id"] == user_id);
+	// 1.1 예약정보가 이미 존재한다면 true 반환
+	if (call != undefined) {
+		return true;
+	}
+	// 1.2 예약정보가 없다면 false 반환
+	return false;
+}
+
+// --------------------------------------------------
+
+// [호출처리 알림수신 서비스 등록/처리 함수] <app_044>
+function advertise_receive_call_alarm_service(user_id) {
+	print("Advertise receive call alarm service");
+	receive_call_alarm_client = new ROSLIB.Service({
+		ros : ros,
+		name : '/receive_call_alarm_service_' + user_id,
+		serviceType : 'automobile_project/receive_call_alarm_s'
+	});
+
+	receive_call_alarm_client.advertise((request, response) => {
+		// 1. 예약처리 알람 수신
+		var call_id = request.call_id;
+		var car_id = request.car_id;
+		var alarm_type = request.alarm_type;
+		var timeout_delay = request.timeout_delay;
+		call_id = convert("string", call_id);
+		car_id = convert("int", car_id);
+		alarm_type = convert("int", alarm_type);
+		timeout_delay = convert("float", timeout_delay)
+		print("예약알람 수신 : 예약번호(" + call_id + ") / 차량(" + car_id + ") / 분류(" + alarm_type + ") / 만료시간(" + timeout_delay + ")"); 
+
+		// 2. 알림확인 가능 상태로 변경
+		update_call_alarm_status(call_id, alarm_type, true);
+
+		// 3. 사용자 확인입력 대기 시작 (스레드)
+		setTimeout(() => {
+			wait_call_alarm_user_input(call_id, alarm_type, timeout_delay);
+		}, 100);
+
+		/*
+		// 2. 알람 수신 처리
+		// 2.1 알람수신 출력
+		print_receive_call_alarm_result(call_id, car_id, alarm_type, timeout_delay);
+		// 2.2 알람확인 과정 시작
+		setTimeout(() => {
+			receive_call_alarm_response_request(call_id, alarm_type, timeout_delay)
+		}, 3000);
+		*/
+
+		// 3. 응답
+		response.accepted = true;
+		return true;
+	});
+}
+
+// [예약알람 사용자 확인입력 대기 함수]
+async function wait_call_alarm_user_input(call_id, alarm_type, timeout_delay) {
+	print("예약알람 대기 타이머 시작 : " + timeout_delay);
+	var call = get_call_by_call_id(call_id);
+	// 1. 만료시간동안 사용자의 입력을 대기한다.
+	while (timeout_delay > 0) {
+		// 0.5초 주기로 대기
+		await sleep(1000);
+		timeout_delay -= 1;
+		// 1.1. 만료시간 내에 사용자의 입력이 있을 시 알람확인 메시지를 전송한다.
+		if (alarm_type == 1) {
+			if (call["start_station_call"]["check"] == true) {
+				receive_call_alarm_response_request(call_id, alarm_type);
+				return;
+			}
+		} else if (alarm_type == 2) {
+			if (call["end_station_call"]["check"] == true) {
+				receive_call_alarm_response_request(call_id, alarm_type);
+				return;
+			}
+		}
+		print("예약알람 확인 잔여시간 : " + timeout_delay);
+	}
+
+	var call_index = call_list.findIndex(item => item == call);
+	if (call_index != -1) {
+	// 3. 만료시간 종료 시 알림확인 불가상태로 변경
+		update_call_alarm_status(call_id, alarm_type, false);
+
+		// 4. 만료시간 내에 사용자의 입력이 없을 시 해당 예약을 제거한다.
+		print("알람확인 타이머 만료 : 해당 예약정보 제거");
+		call_list.splice(call_index, 1);
+		call = null;
+		print("call list length : " + call_list.length);
+	}
+}
+
+// [알림확인 가능상태 변경 함수]
+// 예약 id / 알람종류 / 변경값을 받아 특정 예약의 알람확인 가능상태를 true/false 로 변경한다.
+function update_call_alarm_status(call_id, alarm_type, value) {
+	print("알람확인 상태 전환 : " + call_id + " / " + alarm_type + " / " + value);
+	var call = get_call_by_call_id(call_id);
+		if (alarm_type == 1) {
+			call["start_station_call"]["alarm"] = value;
+		}
+		else if (alarm_type == 2) {
+			call["end_station_call"]["alarm"] = value;
+		}
+}
+
+// [예약알람 사용자확인 입력 함수]
+function alarm_user_input(call_id, alarm_type) {
+	print("Alarm user input : " + call_id + " / " + alarm_type)
+	var call = get_call_by_call_id(call_id);
+	if (alarm_type == 1) {
+		if (call["start_station_call"]["alarm"] == true) {
+			print("Alarm user input changed : " + alarm_type);
+			call["start_station_call"]["check"] = true;
+		}
+	} else if (alarm_type == 2) {
+		if (call["end_station_call"]["alarm"] == true) {
+			print("Alarm user input changed : " + alarm_type);
+			call["end_station_call"]["check"] = true;
+		}
+	}
+
+	// 사용자의 입력 직후 가능상태를 불가로 변경해 추가적인 입력을 막는다.
+	update_call_alarm_status(call_id, alarm_type, false);
+}
+
+// [예약알람 사용자확인 입력 버튼 함수]
+function alarm_user_input_button() {
+	print("Alarm user input button clicked");
+	// 1. 알람 사용자확인 값 가져오기
+	var user_id = document.getElementById("alarm_user_input_user_id").value;
+	var alarm_type = document.getElementById("alarm_user_input_alarm_type").value;
+	user_id = convert("string", user_id);
+	alarm_type = convert("int", alarm_type);
+
+	// 2. 예약유무 검사
+	var call_existance_check = check_call_existance(user_id);
+	if (call_existance_check == false) {
+		print("No call exist from user : " + user_id);
+		return;
+	}
+	
+	// 3. 예약 추출
+	var call = get_call_by_user_id(user_id);
+
+	// 4. 알람확인상태 검사
+	if (alarm_type == 1) {
+		if (call["start_station_call"]["alarm"] == false) {
+			print("Not alarm time : type 1");
+			return;
+		}
+	}
+	else if (alarm_type == 2) {
+		if (call["end_station_call"]["alarm"] == false) {
+			print("Not alarm time : type 2");
+			return;
+		}
+	}
+
+	// 5. 알람 확인 처리
+	alarm_user_input(call["call_id"], alarm_type);
+}
+
+// [예약 추출 함수 - 1]
+function get_call_by_call_id(call_id) {
+	return call_list.find(call => call["call_id"] == call_id);
+}
+
+// [예약 추출 함수 - 2]
+function get_call_by_user_id(user_id) {
+	return call_list.find(call => call["user_id"] == user_id);
+}
+
+function print_receive_call_alarm_result() {
+
+}
+
+// [호출처리 알림확인 서비스 함수] <app_046>
+// 전달 : 사용자 id / 차량번호 / 확인대상 정류장 번호(시작, 도착 정류장 번호)
+// 수신 : 결과 스테이터스(result.result_status) (1 = 정상처리 / -1 = 처리실패)
+function receive_call_alarm_response_service(user_id, car_id, call_station_id) {
+	return new Promise(function (resolve, reject) {
+		var request = new ROSLIB.ServiceRequest({
+			user_id : user_id,
+			car_id : car_id,
+			call_station_id : call_station_id
+		});
+		receive_call_alarm_response_client.callService(request, function(result) {
+			if (result) { resolve(result); }
+			reject(new Error("Receive call alarm response request is failed"));
+		});
+	});
+}
+
+// [호출처리 알림확인 요청 함수] <app_047>
+async function receive_call_alarm_response_request(call_id, alarm_type) {
+	// 0. 예약정보 불러오기
+	var call = call_list.find(call => call["call_id"] == call_id)
+	var user_id = call["user_id"]
+	var car_id = call["car_id"]
+	print("예약확인 전송 : 사용자(" + user_id + ") / 차량(" + car_id + ")");
+	var call_station_id = -1
+	if (alarm_type == 1) {
+		call_station_id = call["start_station_call"]["station_id"]
+	} else if (alarm_type == 2) {
+		call_station_id = call["end_station_call"]["station_id"]
+	}
+
+	// 1. 형변환 : ros service 형식에 맞게 형변환을 수행한다.
+	//user_id = convert("string", user_id);
+	user_id = convert("string", user_id);
+	car_id = convert("int", car_id);
+	call_station_id = convert("int", call_station_id);
+
+	print("예약 정류장 : " + call_station_id);
+
+	// 2. 알림응답 요청
+	receive_call_alarm_response_service(user_id, car_id, call_station_id).then(async function (result) { 
+		// 3. 알림응답 요청 수신 
+		var result_status = result.result_status;
+		// 3.1 정상 처리 시
+		if (result_status == 1) {
+			print("정상처리");
+			if (alarm_type == 2) {
+				delete_call_by_call_id(call_id);
+			}
+		}
+		// 3.2 처리 실패 시
+		else if (result_status == -1) {
+			print("실패");
+			// 원래는 재시도 후 시간만료 시 제거
+			if (alarm_type == 2) {
+				delete_call_by_call_id(call_id);
+			}
+		}
+
+
+		print("알림응답 후 예약목록 : " + call_list.length);
+	}).catch(function (err) { 
+		console.error(err);
+	});
+}
+
+function delete_call_by_call(call) {
+	var call_index = call_list.find(item => item == call);
+	call_list.splice(call_index, 1);
+	call = null;
+}
+
+function delete_call_by_call_id(call_id) {
+	var call_index = call_list.find(item => item["call_id"] == call_id);
+	call_list.splice(call_index, 1);
+}
+
+// --------------------------------------------------
+
+function cancel_call_service(call_id, user_id) {
+	return new Promise(function (resolve, reject) {
+		var request = new ROSLIB.ServiceRequest({
+			call_id : call_id,
+			user_id : user_id
+		});
+		cancel_call_client.callService(request, function(result) {
+			if (result) { resolve(result); }
+			reject(new Error("Cancel call request is failed"));
+		});
+	});
+}
+
+async function cancel_call_request() {
+
+	var call_id = document.getElementById("cancel_call_call_id").value;
+	var user_id = document.getElementById("cancel_call_user_id").value;
+	print("예약 취소 요청 : 예약번호(" + call_id + ") / 사용자(" + user_id + ")");
+
+	call_id = convert("string", call_id);
+	user_id = convert("string", user_id);
+
+	var call = get_call_by_user_id(user_id);
+	if (call == undefined) {
+		print("예약 취소 요청 : 등록된 예약이 없습니다.");
+		return;
+	}
+	
+	cancel_call_service(call_id, user_id).then(async function (result) { 
+		
+		var result_status = result.result_status;
+		print("예약취소 요청 결과상태 : " + result_status);
+		print_cancel_call_result(result_status);
+
+		// 예약취소 처리결과 : 성공
+		if (result_status == 1) {
+			print("예약취소에 성공했습니다.")
+			remove_call_by_call_id(call_id);
+		}
+		// 예약취소 처리결과 : 실패
+		else {
+			print("예약취소에 실패했습니다.")
+		}
+
+	}).catch(function (err) { 
+		console.error(err);
+	});
+}
+
+function print_cancel_call_result(result_status) {
+	var cancel_call_result_status = document.getElementById("cancel_call_result_status");
+	cancel_call_result_status.innerHTML = result_status;
+}
+
+// --------------------------------------------------
+
+function get_car_point_list_service(car_id, start_station_id, end_station_id) {
+	return new Promise(function (resolve, reject) {
+		var request = new ROSLIB.ServiceRequest({
+			car_id : car_id,
+			start_station_id : start_station_id,
+			end_station_id : end_station_id
+		});
+		get_car_point_list_client.callService(request, function(result) {
+			if (result) { resolve(result); }
+			reject(new Error("Get car point list request is failed"));
+		});
+	});
+}
+
+async function get_car_point_list_request() {
+	var car_id = document.getElementById("get_car_point_list_car_id").value;
+	var start_station_id = document.getElementById("get_car_point_list_start_station_id").value;
+	var end_station_id = document.getElementById("get_car_point_list_end_station_id").value
+
+	car_id = convert("int", car_id);
+	start_station_id = convert("int", start_station_id);
+	end_station_id = convert("int", end_station_id);
+
+	print("경로좌표 요청 : 차량(" + car_id + ") / 시작(" + start_station_id + ") / 종료(" + end_station_id + ")");
+	
+	get_car_point_list_service(car_id, start_station_id, end_station_id).then(async function (result) { 
+		
+		var point_list = result.point_list;
+		var result_status = result.result_status;
+
+		print("경로좌표 요청 결과상태 : " + result_status);
+		print_get_car_point_list_result(result_status);
+
+		// 예약취소 처리결과 : 성공
+		if (result_status == 1) {
+			print("경로좌표 요청 성공")
+			print("경로좌표 : Length(" + point_list.length + ")");
+		}
+		// 예약취소 처리결과 : 실패
+		else {
+			print("경로좌표 요청 실패 : " + result_status);
+		}
+
+	}).catch(function (err) { 
+		console.error(err);
+	});
+}
+
+function print_get_car_point_list_result(result_status) {
+	var get_car_point_list_result_status = document.getElementById("get_car_point_list_result_status");
+	get_car_point_list_result_status.innerHTML = result_status;
+}
+
+
+// --------------------------------------------------
+
+// [서비스 등록여부 검사 함수] <app_043>
+function check_service_existance(service_list) {
+	print("Check service existance");
+	var receive_add_call_result_service_check = false;
+	var receive_call_alarm_service_check = false;
+	for (var i = 0; i < service_list.length; i++) {
+		if (service_list[i] == "/receive_add_call_result_service_user_002") {
+			receive_add_call_result_service_check = true;
+		} else if (service_list[i] == "/receive_call_alarm_service_user_002") {
+			receive_call_alarm_service_check = true;
+		}
+	}
+
+	if (receive_add_call_result_service_check == false) {
+		advertise_receive_add_call_result_service("user_002");
+	} 
+	if (receive_call_alarm_service_check == false) {
+		advertise_receive_call_alarm_service("user_002");
+	}
+}
+
+//  [서비스 등록 함수] <app_039>
+function advertise_services() {
+	print("Advertise services");
+	//ros.getServices(check_service_existance);
+	// 1번 연결이 끊어진 websocket client 에 대해서 서비스는 유효하지 않다. (서버입장)
+	// 하지만 application 측에선 여전히 서비스가 유지된것처럼 보여진다.
+	// 현재는 강제로 서비스를 재등록(overwritting)하는 방식으로 오류를 보완한다.
+	advertise_receive_add_call_result_service("user_002");
+	advertise_receive_call_alarm_service("user_002");
+}
+
+// --------------------------------------------------
+
+// [웹 브라우저 디버그 출력 함수] <app_040>
+function print(str) {
+	console.log(str);
+}
+
+// [자바스크립트 비동기 대기 함수] <app_041> 
+function sleep(ms) {
+	return new Promise (resolve => setTimeout(resolve, ms));
+}
+
+// [형변환 함수] <app_045>
+function convert(convert_type, value) {
+	var array = null;
+	// print("변환 전 : " + value);
+	switch (convert_type) {
+		case "string" :
+			return String(value);
+		case "int" : 
+			return parseInt(value);
+		case "float" :
+			return parseFloat(value);
+		default : 
+			print("Converter : Wrong convert type");
+	}	
+}
+
+// --------------------------------------------------
+
+async function test() {
+	
+	// var temp1 = await test1();
+	// print("Temp1 : " + temp1);
+	// var temp2 = await test2();
+	// print("Test clear");
+
+	// var array = new Array();
+	// temp = {
+	// 	"id" : 1,
+	// 	"status" : 0
+	// }
+	// array.push(temp);
+	// var finding = array.find(item => item["id"] == 1);
+	// finding["status"] = 1;
+	// print("Temp : " + temp["status"]);
+	// print("Finding : " + finding["status"]);
+
+	setInterval(() => {
+		add_call_request();
+	}, 500);
+}
+
+async function test3() {
+	sleep(1000);
+	return 1;
+}
+
+async function test1() {
+	var count = 0;
+	while (count < 10) {
+		print("Test 1");
+		count += 1;
+		await sleep(1000);
+	}
+
+	return 1;
+}
+
+async function test2() {
+	await sleep(5000);
+	print("Test 2")
+	close();
+}
+
+// --------------------------------------------------
+
+window.onload = async function() {
+	initialize_service_client();
+	initialize_station();
+	advertise_services();
+
+}
+
+</script>
+</head>
+<body>
+	<h1>Simple ROS User Interface</h1>
+	<p>Connection status: <span id="status"></span></p>
+
+	<h3>Add user service test</h3>
+	<p>[Requesting]
+		<br>User ID : <input type="text" name="add_user_user_id" id="add_user_user_id" style="width:100px;" value="user_002"></input>
+		<br><button onclick="add_user_request()">입력</button>
+	</p>
+
+	<h3>Get Latest Station Info Service Test</h3>
+	<p>[Application version(Latest updated date)] 
+		<br>Date : <span id="app_latest_update_date"></span>
+		<br><button onclick="get_latest_station_info_request()">입력</button>
+	</p> 
+	<p>[Requested latest station Info]
+		<br>
+		<table id="latest_station_info_table" class="table">
+			<colgroup>
+				<!-- 번호 / ID / 이름 / 위도 / 경도 / 갱신일 -->
+				<col style="width:60px;">
+				<col style="width:60px;">
+				<col style="width:120px;">
+				<col style="width:120px;">
+				<col style="width:120px;">
+				<col style="width:120px;">
+			</colgroup>
+			<thead>	
+				<tr>
+					<th>No</th>
+					<th>ID</th>
+					<th>Name</th>
+					<th>Lat</th>
+					<th>Long</th>
+					<th>Date</th>
+				</tr>
+			</thead>
+			<tbody id="latest_station_info_table_tbody">
+				<tr>
+				</tr>
+			</tbody>
+		</table>
+		<span id="latest_station_info"></span>
+		  </p>	  
+
+  	<h3>Get Near Station Service Test</h3>
+	<p>[User position] 
+		<br>latitude : <input type="text" name="near_user_lat" id="near_user_lat" style="width:50px;" value="0"></input>
+		<br>longitude : <input type="text" name="near_user_long" id="near_user_long" style="width:50px;" value="0"></input>
+		<br><button onclick="get_near_station_request()">입력</button>
+  	</p> 
+  	<p>[Near station]
+		<br>ID : <span id="near_station_id"></span>
+		<br>Name : <span id="near_station_name"></span>
+		<br>Latitude : <span id="near_station_lat"></span>
+		<br>Longitude : <span id="near_station_long"></span>
+		<br>Latest_Update_Date : <span id="near_station_latest_update_date"></span>  
+	</p>
+
+	<h3>Get Specific Station Service Test</h3>
+	<p>[Select station]
+		<br>Station ID : <input type="text" name="specific_station_id_input" id="specific_station_id_input" style="width:50px;" value="1"></input>
+		<br><button onclick="get_specific_station_request()">입력</button>
+	</p>
+  	<p>[Selected station Info]
+		<br>ID : <span id="specific_station_id"></span>
+		<br>Name : <span id="specific_station_name"></span>
+		<br>Latitude : <span id="specific_station_lat"></span>
+  		<br>Longitude : <span id="specific_station_long"></span>
+		<br>Latest Update Date : <span id="specific_station_latest_update_date"></span>
+	</p>
+
+	<h3>Get Arrival Info Service Test</h3>
+	<p>[Requesting]
+		<br>Station ID : <input type="text" name="arrival_info_station_id" id="arrival_info_station_id" style="width:50px;" value="1"></input>
+		<br><button onclick="get_arrival_info_request()">입력</button>
+	</p>
+  	<p>[Requested arrival Info]
+	<br>
+	<table id="arrival_info_table" class="table">
+		<colgroup>
+			<col style="width:60px;">
+			<col style="width:60px;">
+			<col style="width:60px;">
+			<col style="width:60px;">
+			<col style="width:120px;">
+			<col style="width:120px;">
+			<col style="width:120px;">
+			<col style="width:60px;">
+			<col style="width:60px;">
+			<col style="width:80px;">
+			<col style="width:60px;">
+		</colgroup>
+		<thead>	
+			<tr>
+				<th>ID</th>
+				<th>Status</th>
+				<th>Current</th>
+				<th>Next</th>
+				<th>Route</th>
+				<th>Lat</th>
+				<th>Long</th>
+				<th>Total</th>
+				<th>Current</th>
+				<th>Distance</th>
+				<th>Goal</th>
+			</tr>
+		</thead>
+		<tbody id="arrival_info_table_tbody">
+			<tr>
+			</tr>
+		</tbody>
+	</table>
+  	</p>
+
+	<h3>Open car information topic test</h3>
+	<p>[Requesting]
+		<br>User ID : <input type="text" name="open_car_information_topic_user_id" id="open_car_information_topic_user_id" style="width:100px;" value="user_002"></input>
+		<br>Car ID : <input type="text" name="open_car_information_topic_car_id" id="open_car_information_topic_car_id" style="width:50px;" value="1"></input>
+		<br><button onclick="open_car_information_topic_request()">입력</button>
+	</p>
+  	<p>[Requested open car information acceptance]
+		<br>Acceptance : <span id="open_car_information_topic_result_status"></span> 	
+	</p>
+	<h3>[Subscribing car information]</h3>
+	<p>
+			<table id="car_information_table" class="table">
+			<colgroup>
+				<col style="width:60px;">
+				<col style="width:60px;">
+				<col style="width:60px;">
+				<col style="width:60px;">
+				<col style="width:120px;">
+				<col style="width:120px;">
+				<col style="width:120px;">
+				<col style="width:60px;">
+				<col style="width:60px;">
+				<col style="width:80px;">
+				<col style="width:60px;">
+			</colgroup>
+			<thead>	
+				<tr>
+					<th>ID</th>
+					<th>Status</th>
+					<th>Current</th>
+					<th>Next</th>
+					<th>Route</th>
+					<th>Lat</th>
+					<th>Long</th>
+					<th>Total</th>
+					<th>Current</th>
+					<th>Distance</th>
+					<th>Goal</th>
+				</tr>
+			</thead>
+			<tbody id="car_information_table_tbody">
+				<tr>
+				</tr>
+			</tbody>
+		</table>
+	</p>	
+	<h3>Close car information topic test</h3>
+	<p>[Requesting]
+		<br>User ID : <input type="text" name="close_car_information_topic_user_id" id="close_car_information_topic_user_id" style="width:100px;" value="user_002"></input>
+		<br>Car ID : <input type="text" name="close_car_information_topic_car_id" id="close_car_information_topic_car_id" style="width:50px;" value="1"></input>
+		<br><button onclick="close_car_information_topic_request()">입력</button>
+	</p>
+	<p>[Requested close car information acceptance]
+		<br>Acceptance : <span id="close_car_information_topic_acceptance"></span> 	
+	</p>
+<!--
+	<h3>Add call service test</h3>
+	<p>[Requesting]
+		<br>User ID : <input type="text" name="add_call_user_id" id="add_call_user_id" style="width:100px;" value="user_002"></input>
+		<br>Car ID : <input type="text" name="add_call_car_id" id="add_call_car_id" style="width:50px;" value="1"></input>
+		<br>Start Station ID : <input type="text" name="add_call_start_station_id" id="add_call_start_station_id" style="width:50px;" value="1"></input>
+		<br>End Station ID : <input type="text" name="add_call_end_station_id" id="add_call_end_station_id" style="width:50px;" value="1"></input>
+		<br><button onclick="open_car_information_topic_request()">입력</button>
+	</p>
+-->
+<h3>Get call list service test</h3>
+<p>[Requesting]
+	<br>User ID : <input type="text" name="get_call_list_user_id" id="get_call_list_user_id" style="width:100px;" value="user_002"></input>
+	<br>Start Station ID : <input type="text" name="get_call_list_start_station_id" id="get_call_list_start_station_id" style="width:50px;" value="1"></input>
+	<br>End Station ID : <input type="text" name="get_call_list_end_station_id" id="get_call_list_end_station_id" style="width:50px;" value="4"></input>
+	<br><button onclick="get_call_list_request()">입력</button>
+</p>
+<h3>[Get call list car information]</h3>
+<p>
+		<table id="get_call_list_table" class="table">
+		<colgroup>
+			<col style="width:60px;">
+			<col style="width:60px;">
+			<col style="width:60px;">
+			<col style="width:60px;">
+			<col style="width:120px;">
+			<col style="width:120px;">
+			<col style="width:120px;">
+			<col style="width:60px;">
+			<col style="width:60px;">
+			<col style="width:80px;">
+			<col style="width:60px;">
+		</colgroup>
+		<thead>	
+			<tr>
+				<th>ID</th>
+				<th>Status</th>
+				<th>Current</th>
+				<th>Next</th>
+				<th>Route</th>
+				<th>Lat</th>
+				<th>Long</th>
+				<th>Total</th>
+				<th>Current</th>
+				<th>Distance</th>
+				<th>Goal</th>
+			</tr>
+		</thead>
+		<tbody id="get_call_list_table_tbody">
+			<tr>
+			</tr>
+		</tbody>
+	</table>
+</p>
+<h3>Add call service test</h3>
+<p>[Requesting]
+	<br>User ID : <input type="text" name="add_call_user_id" id="add_call_user_id" style="width:100px;" value="user_002"></input>
+	<br>Car ID : <input type="text" name="add_call_car_id" id="add_call_car_id" style="width:50px;" value="1"></input>
+	<br>Start Station ID : <input type="text" name="add_call_start_station_id" id="add_call_start_station_id" style="width:50px;" value="1"></input>
+	<br>End Station ID : <input type="text" name="add_call_end_station_id" id="add_call_end_station_id" style="width:50px;" value="4"></input>
+	<br><button onclick="add_call_request()">입력</button>
+</p>
+  <p>[Requested add call service status]
+	<br>Accepted : <span id="add_call_status"></span> 	
+</p>	
+<h3>Receive call alarm response service test</h3>
+<p>[Requesting]
+	<br>User ID : <input type="text" name="alarm_user_input_user_id" id="alarm_user_input_user_id" style="width:100px;" value="user_002"></input>
+	<br>Alarm type : <input type="text" name="alarm_user_input_alarm_type" id="alarm_user_input_alarm_type" style="width:50px;" value="1"></input>
+	<br><button onclick="alarm_user_input_button()">입력</button>
+</p>
+
+<h3>Cancel call service test</h3>
+<p>[Requesting]
+	<br>Call ID : <input type="text" name="cancel_call_call_id" id="cancel_call_call_id" style="width:100px;" value="user_002/1"></input>
+	<br>User ID : <input type="text" name="cancel_call_user_id" id="cancel_call_user_id" style="width:100px;" value="user_002"></input>
+	<br><button onclick="cancel_call_request()">입력</button>
+</p>
+  <p>[Requested add call service result status]
+	<br>Result status : <span id="cancel_call_result_status"></span> 	
+</p>	
+
+<h3>Get car point list service test</h3>
+<p>[Requesting]
+	<br>Car ID : <input type="text" name="get_car_point_list_car_id" id="get_car_point_list_car_id" style="width:100px;" value="1"></input>
+	<br>Start Station ID : <input type="text" name="get_car_point_list_start_station_id" id="get_car_point_list_start_station_id" style="width:100px;" value="1"></input>
+	<br>End Station ID : <input type="text" name="get_car_point_list_end_station_id" id="get_car_point_list_end_station_id" style="width:100px;" value="1"></input>
+	<br><button onclick="get_car_point_list_request()">입력</button>
+</p>
+  <p>[Requested get car point list service result status]
+	<br>Result status : <span id="get_car_point_list_result_status"></span> 	
+</p>	
+
+</body>
+</html>
